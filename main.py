@@ -1,4 +1,6 @@
 import os
+import sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import requests
 from dotenv import load_dotenv
 import json
@@ -12,9 +14,13 @@ from typing import List, Dict
 import base64
 import pytz
 import dateparser
-from dateutil import parser
+from dateutil import parser, tz
 from typing import Optional, Dict, List 
-
+from database import DatabaseService
+from urllib.parse import urlparse, parse_qs
+from dateparser import parse
+from dateparser.conf import settings
+from email.utils import parsedate_to_datetime
 DUBAI_TIMEZONE = pytz.timezone('Asia/Dubai')
 
 load_dotenv()
@@ -53,7 +59,23 @@ class EmailClassifier:
             "priority": priority,
             "suggested_response_time": suggested_response_time
         }
-    
+    def summarize_meeting(self, email_body: str) -> str:
+        prompt = f"""Summarize this meeting request into a concise 1-2 sentence description focusing on:
+        - Purpose of meeting
+        - Key topics
+        - Any special instructions
+        
+        Email content:
+        {email_body[:2000]}"""
+        
+        try:
+            summary = self._call_ai_api(prompt)
+            summary = re.sub(r'^Summary:\s*', '', summary)  
+            summary = re.sub(r'\s+', ' ', summary).strip()  
+            return summary[:500]  
+        except Exception as e:
+            print(f"⚠️ Summary generation failed: {str(e)}")
+            return "Meeting scheduled via email"  
     def _call_ai_api(self, prompt: str) -> str:
         headers = {
             "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
@@ -82,6 +104,7 @@ class GmailClient:
     
     def _authenticate(self):
         creds = None
+        db = DatabaseService()
         if os.path.exists('token.json'):
             creds = Credentials.from_authorized_user_file('token.json', SCOPES)
         
@@ -96,8 +119,20 @@ class GmailClient:
             with open('token.json', 'w') as token:
                 token.write(creds.to_json())
         
-        return build('gmail', 'v1', credentials=creds)
-    
+        service = build('gmail', 'v1', credentials=creds)
+        
+        profile = service.users().getProfile(userId='me').execute()
+        user_email = profile['emailAddress']
+        token_data = json.loads(creds.to_json())
+        
+        user = db.get_user(user_email)
+        if user:
+            db.update_user_token(user_email, token_data)
+        else:
+            db.create_user(user_email, token_data)
+
+        return service
+        
     def get_recent_emails(self, max_results=5, after_date=None) -> List[Dict[str, str]]:
         try:
             query = 'in:inbox'
@@ -148,11 +183,19 @@ class GmailClient:
                 userId="me",
                 body=message
             ).execute()
-            return f"Message Id: {result['id']}"
+            return {
+            'status': 'success',
+            'message_id': result['id'],
+            'thread_id': thread_id,
+            'raw_response': f"Message Id: {result['id']}"
+            }
         except Exception as e:
             error_msg = f"Failed to send email: {str(e)}"
             print(error_msg)
-            return error_msg
+            return {
+            'status': 'error',
+            'error_message': error_msg
+            }
 
     def _format_email(self, content: str) -> str:
         """Ensure proper email formatting"""
@@ -216,10 +259,10 @@ class GmailClient:
         except Exception as e:
             print(f"Error reading email: {str(e)}")
             return {}
-
 class CalendarClient:
     def __init__(self):
         self.service = self._authenticate()
+        self.db = DatabaseService()
     
     def _authenticate(self):
         creds = None
@@ -257,8 +300,7 @@ class CalendarClient:
     
     def create_event(self, summary, start_time, end_time, attendees=None, location=None, description=None):
         try:
-            # Convert to Dubai timezone
-            dubai_tz = pytz.timezone('Asia/Dubai') #dubai timezone as it's my timezone where i live
+            dubai_tz = pytz.timezone('Asia/Dubai')  # Dubai timezone
             start_time = start_time.astimezone(dubai_tz)
             end_time = end_time.astimezone(dubai_tz)
             
@@ -283,19 +325,67 @@ class CalendarClient:
             if description:
                 event['description'] = description
             
-            event = self.service.events().insert(
+            created_event = self.service.events().insert(
                 calendarId='primary',
                 body=event
             ).execute()
             
-            return event.get('htmlLink')
+            return {
+                'id': created_event['id'], 
+                'link': created_event.get('htmlLink', '')  
+            }
+            
         except Exception as e:
-            print(f" Failed to create calendar event: {str(e)}")
+            print(f"Failed to create calendar event: {str(e)}")
             return None
-    
-    def list_events(self, max_results=10):
+        
+    def update_event(self, event_id, new_start_time=None, new_end_time=None, 
+                   summary=None, description=None, attendees=None, location=None):
         try:
-            now = datetime.utcnow().isoformat() + 'Z' #not touching this part
+            event = self.service.events().get(
+                calendarId='primary',
+                eventId=event_id
+            ).execute()
+            
+            if new_start_time:
+                new_start_time = new_start_time.astimezone(pytz.timezone('Asia/Dubai'))
+                event['start'] = {
+                    'dateTime': new_start_time.isoformat(),
+                    'timeZone': 'Asia/Dubai',
+                }
+            if new_end_time:
+                new_end_time = new_end_time.astimezone(pytz.timezone('Asia/Dubai'))
+                event['end'] = {
+                    'dateTime': new_end_time.isoformat(),
+                    'timeZone': 'Asia/Dubai',
+                }
+            
+            if summary:
+                event['summary'] = summary
+            if description:
+                event['description'] = description
+            if attendees:
+                event['attendees'] = [{'email': email} for email in attendees]
+            if location:
+                event['location'] = location
+                
+            updated_event = self.service.events().update(
+                calendarId='primary',
+                eventId=event_id,
+                body=event
+            ).execute()
+            
+            return {
+                'id': updated_event['id'],
+                'link': updated_event.get('htmlLink', '')
+            }
+        except Exception as e:
+            print(f"Failed to update calendar event: {str(e)}")
+            return None
+           
+    def list_events(self, max_results=25):
+        try:
+            now = datetime.utcnow().isoformat() + 'Z'
             events_result = self.service.events().list(
                 calendarId='primary',
                 timeMin=now,
@@ -353,7 +443,150 @@ class EmailProcessor:
         self.gmail = GmailClient()
         self.classifier = EmailClassifier()
         self.calendar = CalendarClient()
+        self.db = DatabaseService()
+        
+        profile = self.gmail.service.users().getProfile(userId='me').execute()
+        self.user_email = profile['emailAddress']
+        self.current_user = self.db.get_user(self.user_email)
+        
+        if not self.current_user:
+            token_data = {}  
+            self.current_user = self.db.create_user(self.user_email, token_data)
 
+    def _enter_composition_flow(self, draft: str, recipient: str, subject: str, 
+                            thread_id: str = None, context: str = ""):
+        current_content = draft
+        original_prompt = f"Response to: {subject}"
+        
+        while True:
+            print("\n✉️ Email Composition Menu:")
+            print("[1] Send email now")
+            print("[2] Edit line-by-line")
+            print("[3] Revise with AI instructions")
+            print("[4] Regenerate from scratch")
+            print("[5] View original message")
+            print("[6] Cancel and return")
+            
+            choice = input("Select option: ").strip()
+            
+            if choice == "1": 
+                print(f"\nTo: {recipient}")
+                print(f"Subject: {subject}")
+                print("\nMessage Content:")
+                print("=" * 50)
+                print(current_content)
+                print("=" * 50)
+                
+                confirm = input("Send this email? (y/n): ").lower()
+                if confirm == 'y':
+                    result = self.gmail.send_email(
+                        to=recipient,
+                        subject=subject,
+                        body=current_content,
+                        thread_id=thread_id
+                    )
+                    if "Message Id" in result:
+                        message_id = result.split(": ")[1] if ": " in result else "unknown"
+                        self.db.log_sent_email({
+                        'user_id': self.current_user.id,
+                        'thread_id': thread_id,
+                        'message_id': message_id,
+                        'recipient': recipient,
+                        'subject': subject,
+                        'body': current_content,
+                        'context': context[:1000]  
+                    })
+                        print("✅ Email sent successfully!")
+                        return True
+                return False
+            
+            elif choice == "2": 
+                current_content = self._edit_email_interactive(current_content)
+                print("\nEdited Email:")
+                print("=" * 50)
+                print(current_content)
+                print("=" * 50)
+                
+            elif choice == "3": 
+                print("\nCurrent AI Context:")
+                print(f"Original message: {context[:200]}...")
+                instruction = input("Enter revision instructions: ")
+                current_content = self._edit_email_with_ai(current_content, instruction)
+                print("\nRevised Email:")
+                print("=" * 50)
+                print(current_content)
+                print("=" * 50)
+                
+            elif choice == "4":  
+                new_prompt = input("Enter new instructions (or press Enter to keep context): ")
+                if not new_prompt:
+                    new_prompt = f"Improve this email draft: {current_content[:500]}"
+                current_content = self.classifier._call_ai_api(new_prompt)
+                current_content = self._clean_generated_email(current_content)
+                print("\nRegenerated Email:")
+                print("=" * 50)
+                print(current_content)
+                print("=" * 50)
+                
+            elif choice == "5":  
+                print("\nOriginal Message:")
+                print("=" * 50)
+                print(context)
+                print("=" * 50)
+                
+            elif choice == "6":  
+                print("Email composition cancelled.")
+                return False
+                
+            else:
+                print("Invalid option. Please choose 1-6.")
+    def _compose_response_for_email(self, email: Dict[str, str]):
+        if not email or not email.get('body'):
+            print("⚠️ Cannot compose response - no email content")
+            return
+            
+        print("\n✉️ Composing response...")
+        
+        sender = email.get('from', '')
+        subject = email.get('subject', 'Response to your email')
+        body = email.get('body', '')
+        
+        sender_email = ""
+        if sender:
+            email_match = re.search(r'<([^>]+)>', sender)
+            sender_email = email_match.group(1) if email_match else sender
+        
+        prompt = f"""
+        Compose a professional email response to this message:
+        
+        From: {sender}
+        Subject: {subject}
+        
+        Original Message:
+        {body[:1000]}
+        
+        Response should:
+        - Be polite and professional
+        - Address all points in the original email
+        - Keep it concise (3-5 sentences max)
+        - Include a proper greeting and closing
+        """
+        
+        draft = self.classifier._call_ai_api(prompt)
+        draft = self._clean_generated_email(draft)
+        
+        print("\nAI-Generated Draft:")
+        print("=" * 50)
+        print(draft)
+        print("=" * 50)
+        
+        self._enter_composition_flow(
+            draft=draft,
+            recipient=sender_email,
+            subject=f"Re: {subject}",
+            thread_id=email.get('threadId'),
+            context=body
+        )
     def process_inbox(self, lookback_hours: int = 24):
         try:
             print("\n=== Processing Inbox ===")
@@ -372,6 +605,12 @@ class EmailProcessor:
             current_index = 0
             while current_index < len(emails):
                 email = emails[current_index]
+                
+                if self.db.email_already_processed(email['id']):
+                    print(f"Email already processed: {email['subject']}")
+                    current_index += 1
+                    continue
+                    
                 full_email = self.gmail.get_email_content(email['id'])
                 
                 if not full_email or not full_email.get('body'):
@@ -386,56 +625,198 @@ class EmailProcessor:
                 print(f"Snippet: {email['snippet'][:200]}{'...' if len(email['snippet']) > 200 else ''}")
                 print("="*80)
                 
-                meeting_keywords = ['meet', 'appointment', 'schedule', 'call', 'hangout']
-                is_meeting_request = (
-                    any(kw in email['subject'].lower() for kw in meeting_keywords) or
-                    any(kw in full_email['body'].lower() for kw in meeting_keywords)
-                )
+                classification = self.classifier.classify_email(full_email.get('body', ''))
+                actions = {"processed": True}
+                meeting_actions = {}
                 
                 if self._is_meeting_request(full_email.get('body', '')):
                     print("🔔 Meeting request detected!")
-                    self._handle_meeting_email(full_email)
+                    meeting_actions = self._handle_meeting_email(full_email)
+                    actions.update(meeting_actions)
                 else:
                     print("ℹ️ No meeting request detected")
                 
-                print("\nNavigation:")
-                print("[N] Next email  [P] Previous email  [Q] Quit")
-                choice = input("Choose action: ").lower().strip()
+                self.db.log_processed_email({
+                    'id': full_email['id'],
+                    'user_id': self.current_user.id,
+                    'thread_id': full_email.get('threadId'),
+                    'subject': full_email.get('subject', 'No Subject'),
+                    'from': full_email.get('from'),
+                    'category': classification['category'],
+                    'actions': actions,
+                    'ai_response': meeting_actions.get('ai_response', '') 
+                })
                 
-                if choice == 'n':
-                    current_index += 1
-                elif choice == 'p':
-                    current_index = max(0, current_index - 1)
-                elif choice == 'q':
-                    break
-                else:
-                    print("Invalid choice - moving to next email")
-                    current_index += 1
+                while True:
+                    print("\nActions for this email:")
+                    print("[C] Compose response")
+                    print("[N] Next email  [P] Previous email  [Q] Quit to menu")
+                    choice = input("Choose action: ").lower().strip()
+                    
+                    if choice == 'c':
+                        self._compose_response_for_email(full_email)
+                    elif choice == 'n':
+                        current_index += 1
+                        break  
+                    elif choice == 'p':
+                        current_index = max(0, current_index - 1)
+                        break  
+                    elif choice == 'q':
+                        print("\nExiting inbox processing...")
+                        input("Press Enter to return to main menu...")
+                        return 
+                    else:
+                        print("Invalid choice. Please choose C, N, P, or Q.")
             
             print(f"\nProcessed {current_index} emails.")
             
         except Exception as e:
             print(f"Error processing inbox: {str(e)}")
+            import traceback
+            traceback.print_exc() 
         finally:
             input("Press Enter to return to main menu...")
-
+    def _select_existing_event(self, days_ahead=7):
+        """Let user select an existing event to reschedule"""
+        now = datetime.now(DUBAI_TIMEZONE)
+        end_date = now + timedelta(days=days_ahead)
+        
+        print(f"\n📅 Listing events in the next {days_ahead} days:")
+        events = self.calendar.list_events()
+        
+        if not events:
+            print("No upcoming events found")
+            return None
+            
+        filtered_events = []
+        for event in events:
+            start_str = event['start'].get('dateTime', event['start'].get('date'))
+            start = parser.parse(start_str)
+            if now <= start <= end_date:
+                filtered_events.append(event)
+                
+        if not filtered_events:
+            print("No events found in the time range")
+            return None
+            
+        for i, event in enumerate(filtered_events):
+            start_str = event['start'].get('dateTime', event['start'].get('date'))
+            start = parser.parse(start_str)
+            print(f"[{i}] {event['summary']} - {start.strftime('%a %b %d, %I:%M %p')}")
+            
+        choice = input("Select event number (or 'c' to cancel): ").strip()
+        if choice.lower() == 'c':
+            return None
+            
+        try:
+            index = int(choice)
+            if 0 <= index < len(filtered_events):
+                return filtered_events[index]['id']  
+        except ValueError:
+            pass
+            
+        print("Invalid selection")
+        return None
+    
+    def _extract_latest_message(self, email_body: str) -> str:
+        """
+        Extract only the latest message from an email thread by:
+        1. Removing quoted/replied sections
+        2. Removing email signatures
+        3. Isolating the user's new text
+        """
+        quote_patterns = [
+            r"On .* wrote:",  # English
+            r"Le .* \u00E9crit :",  # French
+            r"El .* escribi\u00F3:",  # Spanish
+            r"\d{4}-\d{2}-\d{2} \d{2}:\d{2} .* <.*>:",  # Email headers
+            r"From: .*",  # Email headers
+            r"-----Original Message-----",
+            r"_{10,}",  # Lines of underscores
+            r"\-{10,}",  # Lines of dashes
+            r"Sent from my .*",  # Signatures
+        ]
+        
+        lines = email_body.splitlines()
+        clean_lines = []
+        
+        for line in lines:
+            if any(re.search(pattern, line, re.IGNORECASE) for pattern in quote_patterns):
+                break  
+                
+            if line.strip() and not line.startswith(('>', '|')):
+                clean_lines.append(line)
+        
+        clean_body = "\n".join(clean_lines)
+        
+        if len(clean_body) < 50:
+            match = re.search(r"^(.*?)(?:" + "|".join(quote_patterns) + ")", 
+                            email_body, re.DOTALL | re.IGNORECASE)
+            if match:
+                clean_body = match.group(1).strip()
+        
+        return clean_body.strip()
+    
     def _handle_meeting_email(self, email: Dict[str, str]):
-        body = email.get('body', '')
+        raw_body = email.get('body', '')
+        
+        clean_body = self._extract_latest_message(raw_body)
+        clean_body_lower = clean_body.lower()
+        
+
         sender = email.get('from')
         subject = email.get('subject', 'Meeting Request')
+        actions = {"meeting_processed": True}
         
+        # Extract clean sender email
         email_match = re.search(r'<([^>]+)>', sender)
         sender_email = email_match.group(1) if email_match else sender
-
-        proposed_time = None
+        
+        reschedule_keywords = [
+            'reschedule', 're-schedule', 'rearrange', 'change time', 
+            'move', 'postpone', 'new time', 'different time', 'adjust',
+            'push back', 'push forward', 'shift', 'relocate', 'change our meeting',
+            'alternate time', 'rescheduling', 'replan', 're-book'
+        ]
+        
+        is_reschedule = any(keyword in clean_body_lower for keyword in reschedule_keywords)
+        
+        if not is_reschedule:
+            subject_lower = subject.lower()
+            is_reschedule = any(keyword in subject_lower for keyword in reschedule_keywords)
+        
+        thread_id = email.get('threadId')
+        
+        existing_event = None
+        if is_reschedule and thread_id:
+            print("🔁 Reschedule request detected")
+            existing_event = self.db.get_calendar_event_by_thread(thread_id)
+            
+            if existing_event:
+                print(f"  Found existing event: {existing_event.title} on {existing_event.start_time}")
+            else:
+                print("  No existing event found for this thread")
+                print("\nWould you like to:")
+                print("[1] Create a new event")
+                print("[2] Choose an existing event to reschedule")
+                choice = input("Select option: ").strip()
+                
+                if choice == "2":
+                    existing_event = self._select_existing_event()
+                    if not existing_event:
+                        print("No event selected. Creating new event instead.")
+        else:
+            print("  Not a reschedule request")
+        
         detection_methods = [
             self._detect_with_nlp,
             self._detect_with_ai,
             self._detect_manual_fallback
         ]
         
+        proposed_time = None
         for method in detection_methods:
-            proposed_time = method(body)
+            proposed_time = method(clean_body) 
             if proposed_time:
                 break
                 
@@ -443,7 +824,7 @@ class EmailProcessor:
             print("Could not detect meeting time")
             if input("Propose a time manually? (y/n): ").lower() == 'y':
                 self._propose_new_time(email, sender_email)
-            return
+            return actions
             
         dubai_time = proposed_time.astimezone(DUBAI_TIMEZONE)
         time_str = dubai_time.strftime('%A, %B %d at %I:%M %p')
@@ -463,58 +844,106 @@ class EmailProcessor:
         if self._is_time_available(proposed_time):
             print("This time is available")
             if input("Add to calendar? (y/n): ").lower() == 'y':
-                self._schedule_and_confirm(subject, body, sender_email, proposed_time)
+                self._schedule_and_confirm(
+                    subject, 
+                    raw_body,  
+                    sender_email, 
+                    proposed_time, 
+                    email_id=email['id'],
+                    existing_event=existing_event
+                )
         else:
             print("You're busy at that time")
             if input("Suggest alternative? (y/n): ").lower() == 'y':
                 self._suggest_alternative_times(email, sender_email, proposed_time)
-
+        return actions
     def _detect_with_nlp(self, text: str) -> Optional[datetime]:
         try:
-            pattern = r'''
-                (?:next\s+)?(?:mon|tue|wed|thu|fri|sat|sun)\b|  
-                \d{1,2}(?::\d{2})?\s*(?:am|pm)|                  
-                \b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2}|
-                \d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}                  
-            '''
-            matches = re.findall(pattern, text, re.IGNORECASE | re.VERBOSE)
-            
-            if matches:
-                parsed = dateparser.parse(
-                    ' '.join(matches[:2]), 
-                    settings={
-                        'TIMEZONE': 'Asia/Dubai',
-                        'PREFER_DATES_FROM': 'future',
-                        'RELATIVE_BASE': datetime.now(DUBAI_TIMEZONE)
-                    }
-                )
-                if parsed and not parsed.tzinfo:
-                    return DUBAI_TIMEZONE.localize(parsed)
-        except Exception:
-            pass
-        return None
+            # Get current time in Dubai
 
+            now = datetime.now(DUBAI_TIMEZONE)
+            print(f"Current Dubai time: {now.strftime('%Y-%m-%d %H:%M')}")
+            clean_text = self._extract_latest_message(text)
+            print(f"🧹 Cleaned text for NLP analysis:\n{clean_text}\n{'='*50}")
+            patterns = [
+                r'tomorrow at (\d{1,2}(?::\d{2})?\s*(?:am|pm)?)',  # "tomorrow at 10pm"
+                r'at (\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\s*tomorrow',  # "at 10pm tomorrow"
+                r'next (\w+day)\s*at (\d{1,2}(?::\d{2})?\s*(?:am|pm)?)'  # "next friday at 8pm"
+            ]
+            
+            for pattern in patterns:
+                match = re.search(pattern, text, re.IGNORECASE)
+                if match:
+                    time_str = ' '.join(match.groups())
+                    print(f"Pattern matched: '{pattern}' → Extracted: '{time_str}'")
+                    
+                    parsed = dateparser.parse(
+                        time_str,
+                        settings={
+                            'TIMEZONE': 'Asia/Dubai',
+                            'RELATIVE_BASE': now,
+                            'PREFER_DATES_FROM': 'future',
+                        },
+                        languages=['en'] 
+                    )
+
+                    if parsed:
+                        if not parsed.tzinfo:
+                            parsed = DUBAI_TIMEZONE.localize(parsed)
+                        
+                        print(f"Parsed time: {parsed.strftime('%Y-%m-%d %H:%M')}")
+                        
+                        if parsed < now:
+                            print("⚠️ Parsed time is in the past! Ignoring.")
+                            return None
+                            
+                        return parsed
+            return None
+        except Exception as e:
+            print(f"⚠️ NLP detection error: {str(e)}")
+            return None
     def _detect_with_ai(self, text: str) -> Optional[datetime]:
         try:
-            prompt = f'''Extract meeting time from this email. Respond ONLY with:
+            clean_text = self._extract_latest_message(text)
+            now = datetime.now(DUBAI_TIMEZONE)
+            print(f"AI detection using current time: {now}")
+
+            prompt = f'''Extract meeting time ONLY from the MOST RECENT message in this email. 
+            Ignore any quoted/forwarded content or previous messages. Respond ONLY with:
             - ISO 8601 format (YYYY-MM-DDTHH:MM:SS) in Asia/Dubai timezone
-            - "none" if no time found
+            - "none" if no time found in the new message
             
-            Email: {text[:2000]}'''
+            Current Date: {datetime.now(DUBAI_TIMEZONE).date()}
+            Email: {clean_text[:2000]}'''
             
             response = self.classifier._call_ai_api(prompt).strip()
+            print(f"AI response: {response}")
+            
             if response.lower() != 'none':
-                dt = parser.isoparse(response)
-                return dt if dt.tzinfo else DUBAI_TIMEZONE.localize(dt)
-        except Exception:
-            pass
+                if 'T' not in response:
+                    response = re.sub(r'(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})', r'\1T\2', response)
+                
+                dt = parser.parse(response)
+                
+                if dt.tzinfo is None:
+                    dt = DUBAI_TIMEZONE.localize(dt)
+                    
+                if dt < now:
+                    print("⚠️ AI returned past date!")
+                    return None
+                    
+                return dt
+        except Exception as e:
+            print(f"⚠️ AI detection failed: {str(e)}")
+            return self._detect_manual_fallback(text)
         return None
 
     def _detect_manual_fallback(self, text: str) -> Optional[datetime]:
         try:
             time_match = re.search(r'(\d{1,2}:\d{2}\s*(?:am|pm)?', text, re.IGNORECASE)
             day_match = re.search(r'(mon|tue|wed|thu|fri|sat|sun)', text, re.IGNORECASE)
-            
+            clean_text = self._extract_latest_message(text)
+            print(f"🧹 Cleaned text for NLP analysis:\n{clean_text}\n{'='*50}")
             if time_match and day_match:
                 time_str = time_match.group(1)
                 day_str = day_match.group(1)
@@ -527,12 +956,50 @@ class EmailProcessor:
         return None
 
     def _is_meeting_request(self, body: str) -> bool:
+        clean_body = self._extract_latest_message(body)
+        clean_body_lower = clean_body.lower()
         meeting_phrases = [
-            "meet up", "get together", "schedule a meeting", "let's meet",
-            "grab coffee", "hang out", "set up a call", "catch up", "meeting",
-            "book a time", "schedule a call", "plan a meeting"
+            # Core meeting terms
+            "meet", "meeting", "gathering", "appointment", "session", "conference", "consultation",
+            
+            # Scheduling terms
+            "schedule", "book a", "set up", "arrange", "plan a", "organize", "coordinate",
+            
+            # Time-specific terms
+            "catch up", "touch base", "sync up", "check in", "follow up", "get together", "reconnect",
+            
+            # Activity-based terms
+            "grab coffee", "lunch meeting", "dinner meeting", "video call", "zoom call", "teams meeting", 
+            "google meet", "call", "chat", "discuss", "talk", "brainstorm", "review", "briefing", 
+            "workshop", "presentation", "demo", "walkthrough", 
+            
+            # Confirmation terms
+            "confirm our", "still on", "are we still", "following up", "checking in", "reminder about",
+            "as agreed", "as discussed", "as planned",
+            
+            # Location-based terms
+            "in person", "face to face", "at the office", "remotely", "virtually",
+            
+            # Invitation terms
+            "invite you", "join us", "would you be available", "are you free", "are you available",
+            "let's connect", "can we", "could we", "would you like to", "suggest we",
+            
+            # Formal terms
+            "interview", "negotiation", "mediation", "assessment", "evaluation", "training", "onboarding"
         ]
+        
+        # Common false positives to exclude
+        exclude_phrases = [
+            "meeting room", "meeting rooms", "meeting point", "meeting place", "meeting link",
+            "meeting id", "meeting password", "meeting agenda", "meeting minutes", "meeting notes",
+            "meeting recording", "meeting schedule", "meeting request", "meeting invitation"
+        ]
+        
         body_lower = body.lower()
+        
+        if any(phrase in body_lower for phrase in exclude_phrases):
+            return False
+            
         return any(phrase in body_lower for phrase in meeting_phrases)
 
 
@@ -540,43 +1007,106 @@ class EmailProcessor:
     def _is_time_available(self, start_time: datetime, duration_minutes: int = 60) -> bool:
         end_time = start_time + timedelta(minutes=duration_minutes)
         return self.calendar.check_availability(start_time, end_time)
+    def extract_event_id(event_link):
+        parsed = urlparse(event_link)
+        query = parse_qs(parsed.query)
+        return query.get('eid', [None])[0]
     
-    def _schedule_and_confirm(self, subject, body, sender, start_time):
-        end_time = start_time + timedelta(hours=1)
-        
+    def _schedule_and_confirm(self, subject, body, sender, start_time, email_id, existing_event=None):
         dubai_time = start_time.astimezone(DUBAI_TIMEZONE)
+        end_time = start_time + timedelta(hours=1)
         time_str = dubai_time.strftime('%A, %B %d at %I:%M %p')
         
-        event_link = self.calendar.create_event(
-            summary=f"Meeting: {subject}",
-            start_time=start_time,
-            end_time=end_time,
-            attendees=[sender],
-            description=f"Automatically scheduled from email:\n\n{body[:500]}"
-        )
-        
-        if event_link:
-            print(f"   Meeting scheduled: {event_link}")
-            
-            confirm_body = (
-                f"Hi there,\n\n"
-                f"I've scheduled our meeting for {time_str} (Dubai time) as requested.\n\n"
-                f"Looking forward to our conversation!\n\n"
-                f"Best regards,\n[Your Name]"
+        meeting_summary = self.classifier.summarize_meeting(body)
+        event_created = False
+
+        if isinstance(existing_event, str):
+            event_id = existing_event
+            event_result = self.calendar.update_event(
+                event_id=event_id,
+                new_start_time=start_time,
+                new_end_time=end_time,
+                description=f"Rescheduled meeting:\n{meeting_summary}"
             )
-            
-            confirm_subject = f"Confirmed: {subject}"
+            if event_result:
+                print(f"🔁 Rescheduled manually selected event: {event_result.get('link', '')}")
+                db_event = self.db.get_calendar_event_by_google_id(event_id)
+                if db_event:
+                    self.db.update_calendar_event(
+                        event_id=db_event.id,
+                        new_start_time=start_time,
+                        new_end_time=end_time,
+                        new_description=f"Rescheduled: {meeting_summary}"
+                    )
+                event_created = True
+
+        elif existing_event: 
+            event_id = existing_event.google_event_id
+            event_result = self.calendar.update_event(
+                event_id=event_id,
+                new_start_time=start_time,
+                new_end_time=end_time,
+                description=f"Rescheduled: {meeting_summary}"
+            )
+            if event_result:
+                print(f"🔁 Rescheduled existing event: {event_result.get('link', '')}")
+                self.db.update_calendar_event(
+                    event_id=existing_event.id,
+                    new_start_time=start_time,
+                    new_end_time=end_time,
+                    new_description=f"Rescheduled: {meeting_summary}"
+                )
+                event_created = True
+
+        else:  
+            event_result = self.calendar.create_event(
+                summary=f"Meeting: {subject}",
+                start_time=start_time,
+                end_time=end_time,
+                attendees=[sender],
+                description=f"Automatically scheduled:\n\n{meeting_summary}"
+            )
+            if event_result:
+                print(f"✅ New meeting scheduled: {event_result.get('link', '')}")
+                self.db.log_calendar_event({
+                    'user_id': self.current_user.id,
+                    'email_id': email_id,
+                    'title': f"Meeting: {subject}",
+                    'start_time': start_time,
+                    'end_time': end_time,
+                    'attendees': [sender],
+                    'google_event_id': event_result['id'],
+                    'description': meeting_summary
+                })
+                event_created = True
+
+        if event_created:
+            confirm_body = (
+                f"Hi there,\n\nI've scheduled our meeting for {time_str} (Dubai time)."
+                f"\n\nLooking forward to our conversation!\n\nBest regards,\n[Your Name]"
+            )
             result = self.gmail.send_email(
                 to=sender,
-                subject=confirm_subject,
-                body=confirm_body
+                subject=f"Confirmed: {subject}",
+                body=confirm_body,
+                thread_id=email_id
             )
             
-            if "Message Id" in result:
-                print("   Confirmation email sent successfully!")
+            if result.get('status') == 'success':
+                self.db.log_sent_email({
+                    'user_id': self.current_user.id,
+                    'thread_id': email_id,
+                    'message_id': result.get('message_id'),
+                    'recipient': sender,
+                    'subject': f"Confirmed: {subject}",
+                    'body': confirm_body,
+                    'context': f"Meeting confirmation for {time_str}"
+                })
+                print("✅ Confirmation email sent and logged!")
                 return True
+        
+        print("❌ Failed to schedule/confirm meeting")
         return False
-
     def _suggest_alternative_times(self, email, sender, original_time):
         print("  🔍 Finding available times near proposed time...")
         alternatives = self._find_available_times(original_time)
@@ -653,7 +1183,7 @@ class EmailProcessor:
         next_available = None
         
         for day in range(0, 7):
-            for hour in [9, 11, 14, 16]:  # 9am, 11am, 2pm, 4pm
+            for hour in [9, 11, 14, 16]: 
                 candidate = now + timedelta(days=day, hours=hour)
                 if self._is_time_available(candidate):
                     next_available = candidate
@@ -728,35 +1258,48 @@ class EmailProcessor:
     
     def compose_email(self, query: str):
         try:
-            classification = self.classifier.classify_email(query)
-            print(f"\nClassification Results: {json.dumps(classification, indent=2)}")
-                    
-            prompt = f"Write a professional email about: {query}"
-            email_content = self.classifier._call_ai_api(prompt)
-                    
-            email_content = self._clean_generated_email(email_content)
-                    
-            print("\nGenerated Email:")
+            print("\n✉️ Starting New Email Composition")
+            draft = self.classifier._call_ai_api(f"Write a professional email about: {query}")
+            draft = self._clean_generated_email(draft)
+            
+            print("\nGenerated Draft:")
             print("=" * 50)
-            print(email_content)
+            print(draft)
             print("=" * 50)
-                    
-            self._present_editing_menu(email_content, query)
-                    
+            
+            recipient = input("Recipient email: ").strip()
+            subject = input("Subject: ").strip()
+            
+            self._enter_composition_flow(
+                draft=draft,
+                recipient=recipient,
+                subject=subject,
+                context=query
+            )
+            
         except Exception as e:
-            print(f"Error processing request: {str(e)}")
+            print(f"Error composing email: {str(e)}")
         
     def _edit_email_interactive(self, content: str) -> str:
-        print("\n✏️ You can now edit the email. Type your changes directly.")
-        print("When finished, press Enter twice to finish editing.")
-        print("=" * 50)
-        print(content)
-        print("=" * 50)
-        
+        print("\n✏️ Line Editor Mode (press Enter to keep line, type new text to edit)")
+        print("Type '!exit' to finish editing, '!skip' to keep the rest as-is")
+        lines = content.split('\n')
         edited_lines = []
-        for line in content.split('\n'):
-            new_line = input(f"Edit this line or press Enter to keep:\n{line}\n> ") or line
-            edited_lines.append(new_line)
+        
+        for i, line in enumerate(lines):
+            new_line = input(f"Line {i+1}/{len(lines)}:\nOriginal: {line}\nEdit: ")
+            
+            if new_line == '!exit':
+                edited_lines.extend(lines[i:])
+                break
+            elif new_line == '!skip':
+                edited_lines.append(line)
+                edited_lines.extend(lines[i+1:])
+                break
+            elif new_line == '':
+                edited_lines.append(line)
+            else:
+                edited_lines.append(new_line)
         
         return '\n'.join(edited_lines)
         
@@ -822,17 +1365,6 @@ class EmailProcessor:
                 print("Invalid option. Please choose 1-5.")    
 
 
-    def _is_meeting_request(self, body: str) -> bool:
-        """Check if email contains meeting request phrases"""
-        meeting_phrases = [
-            "meet up", "get together", "schedule a meeting", "let's meet",
-            "grab coffee", "hang out", "play", "call", "catch up", "meeting",
-            "appointment", "sync up", "get coffee", "book a time", "plan a call"
-        ]
-        body_lower = body.lower()
-        return any(phrase in body_lower for phrase in meeting_phrases)
-
-
     def _detect_meeting_time(self, text: str) -> datetime:
         try:
             email_date_match = re.search(r'(\d{1,2} [а-я]+\. \d{4} г\. в \d{1,2}:\d{2})', text)
@@ -864,7 +1396,6 @@ class EmailProcessor:
             print("  Using AI to detect meeting time...")
             response = self.classifier._call_ai_api(prompt).strip()
             
-            # Clean and parse response
             clean_response = re.sub(r'[^0-9T:\-]', '', response)
             if clean_response and clean_response.lower() != 'none':
                 dt = parser.isoparse(clean_response)
@@ -877,8 +1408,7 @@ class EmailProcessor:
         return None
     def _is_time_available(self, start_time: datetime, duration_minutes: int = 60) -> bool:
         end_time = start_time + timedelta(minutes=duration_minutes)
-        calendar = CalendarClient()
-        return calendar.check_availability(start_time, end_time)
+        return self.calendar.check_availability(start_time, end_time)
 
     def _schedule_and_respond(self, subject, body, sender, start_time, response_message):
         end_time = start_time + timedelta(hours=1)
@@ -1007,31 +1537,48 @@ class EmailProcessor:
             default_attendees = []
         try:
             print("\n📅 Schedule a Meeting")
-            summary = input(f"Meeting title [{default_summary}]: ").strip() or default_summary
-            if not summary:
-                print("Meeting title cannot be empty")
-                return False
-                
+            print("="*50)
+            
+            while True:
+                summary = input(f"Meeting title [{default_summary}]: ").strip() or default_summary
+                if summary:
+                    break
+                print("❌ Meeting title cannot be empty. Please enter a title.")
+
             location = input("Location (optional): ").strip()
             
             attendees = []
+            print("\nEnter attendee emails (one per line). Type 'done' when finished:")
+            
             if default_attendees:
                 print(f"Default attendees: {', '.join(default_attendees)}")
                 use_default = input("Use these attendees? (y/n): ").strip().lower()
                 if use_default == 'y':
                     attendees = default_attendees
             
-            while not attendees:
-                attendee_input = input("Attendee email (leave blank when done): ").strip()
-                if not attendee_input:
-                    if not attendees:
-                        print("At least one attendee required")
+            if not attendees:
+                print("Add at least one attendee:")
+                attendee_count = 0
+                while True:
+                    attendee = input(f"Attendee #{len(attendees)+1} email: ").strip()
+                    
+                    if attendee.lower() == 'done':
+                        if attendees:
+                            break
+                        print("❌ You must add at least one attendee.")
                         continue
-                    break
-                if '@' not in attendee_input:
-                    print("Invalid email format. Please include '@'")
-                    continue
-                attendees.append(attendee_input)
+                        
+                    if not '@' in attendee:
+                        print("❌ Invalid email format. Must contain '@'. Example: user@example.com")
+                        continue
+                        
+                    attendees.append(attendee)
+                    print(f"✓ Added {attendee}")
+                    
+                    if len(attendees) > 0:
+                        another = input("Add another? (y/n): ").lower().strip()
+                        if another != 'y':
+                            break
             
             while True:
                 start_str = input("Start time (YYYY-MM-DD HH:MM): ").strip()
@@ -1039,22 +1586,35 @@ class EmailProcessor:
                     start_time = datetime.strptime(start_str, "%Y-%m-%d %H:%M")
                     break
                 except ValueError:
-                    print("Invalid format. Please use YYYY-MM-DD HH:MM format")
+                    print("❌ Invalid format. Please use YYYY-MM-DD HH:MM format. Example: 2025-08-15 14:30")
             
             while True:
                 duration_str = input("Duration in minutes: ").strip()
                 try:
                     duration = int(duration_str)
                     if duration <= 0:
-                        print("Duration must be positive")
+                        print("❌ Duration must be a positive number.")
                         continue
                     end_time = start_time + timedelta(minutes=duration)
                     break
                 except ValueError:
-                    print("Please enter a valid number")
+                    print("❌ Please enter a valid number (e.g., 30, 60, 90).")
             
-            start_time = start_time.astimezone(pytz.utc)
-            end_time = end_time.astimezone(pytz.utc)
+            start_time = DUBAI_TIMEZONE.localize(start_time)
+            end_time = DUBAI_TIMEZONE.localize(end_time)
+            
+            print("\n📝 Meeting Details:")
+            print(f"Title: {summary}")
+            print(f"Time: {start_time.strftime('%A, %B %d at %I:%M %p')} to {end_time.strftime('%I:%M %p')}")
+            print(f"Duration: {duration} minutes")
+            print(f"Attendees: {', '.join(attendees)}")
+            if location:
+                print(f"Location: {location}")
+            
+            confirm = input("\nSchedule this meeting? (y/n): ").lower().strip()
+            if confirm != 'y':
+                print("❌ Meeting scheduling cancelled.")
+                return False
             
             calendar = CalendarClient()
             event_link = calendar.create_event(
@@ -1070,10 +1630,10 @@ class EmailProcessor:
                 return True
             print("❌ Failed to schedule meeting")
             return False
-                
+            
         except Exception as e:
-            print(f"Error scheduling meeting: {str(e)}")
-            return False    
+            print(f"❌ Error scheduling meeting: {str(e)}")
+            return False 
 
 class CLIInterface:
     def __init__(self):
@@ -1156,6 +1716,8 @@ class CLIInterface:
             
         except Exception as e:
             print(f"Error viewing events: {str(e)}")
-
 if __name__ == "__main__":
+    CLIInterface().show_menu()
+    from database import init_db
+    init_db()
     CLIInterface().show_menu()
