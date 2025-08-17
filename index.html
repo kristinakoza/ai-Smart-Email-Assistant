@@ -1,0 +1,992 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+<title>Smart Email Assistant — Dashboard</title>
+<style>
+:root {
+  --primary: rgba(255,255,255,0.25);
+  --muted: rgba(255,255,255,0.65);
+  --bg: linear-gradient(145deg, #0f0f1f, #1a1a2e); /* Old background - will replace */
+  --card: rgba(255,255,255,0.12);
+  --success: #2bb673;
+  --danger: #f05384;
+  --border: rgba(255,255,255,0.2);
+}
+
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+  background: linear-gradient(
+    135deg,
+    #ece2fb 0%,
+    #d2b9f7 25%,
+    #9372d3 50%,
+    #cf95c3 75%,
+    #7bacd1 100%
+  );
+  background-size: 400% 400%;
+  animation: gradientFlow 15s ease infinite;
+  color: white;
+  min-height: 100vh;
+}
+@keyframes gradientFlow {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+/* Glassmorphism core style */
+.glass {
+  background: rgba(255, 255, 255, 0.15);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: 
+    0 4px 30px rgba(0, 0, 0, 0.1),
+    0 0 10px rgba(255, 255, 255, 0.1);
+}
+/* Card Grid System */
+.cards-grid-container {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 1.5rem;
+  margin-top: 1rem;
+}
+.btn:hover, .dashboard-card:hover {
+  background: rgba(255, 255, 255, 0.25);
+  box-shadow: 
+    0 0 15px rgba(236, 226, 251, 0.6),
+    0 0 30px rgba(210, 185, 247, 0.4);
+}
+
+.dashboard-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: 0 4px 30px rgba(0,0,0,0.2);
+  border-radius: 10px;
+  padding: 18px;
+  transition: all 0.3s ease;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.dashboard-card:hover {
+  background: var(--card-hover);
+  transform: translateY(-5px);
+}
+
+.card-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.card-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.15);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.card-title {
+  font-size: 1.1rem;
+  font-weight: 700;
+  margin: 0;
+  line-height: 1.3;
+}
+
+.card-subtitle {
+  color: var(--muted);
+  font-size: 0.9rem;
+  margin-top: 4px;
+}
+
+.card-content {
+  flex-grow: 1;
+  margin: 10px 0;
+}
+
+.card-meta {
+  color: var(--muted);
+  font-size: 0.85rem;
+  margin-top: 8px;
+}
+
+.card-footer {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  justify-content: flex-end;
+}
+
+/* Holo effect */
+.holo {
+  background: radial-gradient(circle at top left, #ffb3ff, #a3e0ff, #fff59e, #ffb3ff);
+  background-size: 400% 400%;
+  animation: holoMove 8s ease infinite;
+  mix-blend-mode: overlay;
+}
+
+@keyframes holoMove {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+.app {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  min-height: 100vh;
+}
+
+/* Sidebar */
+.sidebar {
+  background: var(--card);
+  border: 1px solid var(--border);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: 0 4px 30px rgba(0,0,0,0.2);
+  padding: 18px;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+}
+
+.brand {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 18px;
+}
+
+.logo {
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  background: rgba(255,255,255,0.15);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  font-weight: 700;
+  backdrop-filter: blur(6px);
+}
+
+.username { font-weight: 600; }
+
+.nav {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.nav button {
+  background: transparent;
+  border: 0;
+  padding: 10px 12px;
+  text-align: left;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--muted);
+  transition: background 0.3s ease;
+}
+
+.nav button.active, .nav button:hover {
+  background: rgba(255,255,255,0.15);
+  color: white;
+}
+
+/* Header */
+.header {
+  grid-column: 1/-1;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 24px;
+  background: rgba(255,255,255,0.08);
+  border-bottom: 1px solid var(--border);
+  backdrop-filter: blur(8px);
+}
+
+.header h1 { font-size: 1.05rem; margin: 0; }
+.top-actions { display: flex; gap: 8px; align-items: center; }
+
+/* Main content */
+.main { padding: 22px; }
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: 0 4px 30px rgba(0,0,0,0.2);
+  border-radius: 10px;
+  padding: 18px;
+  margin-bottom: 18px;
+}
+
+.toolbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.btn {
+  background: rgba(255,255,255,0.15);
+  color: white;
+  border: 0;
+  padding: 8px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 600;
+  transition: all 0.3s ease;
+}
+.btn:hover {
+  background: rgba(255,255,255,0.3);
+  box-shadow: 0 0 10px rgba(255,255,255,0.5);
+}
+.btn.ghost {
+  background: transparent;
+  color: white;
+  border: 1px solid var(--border);
+}
+
+.table { width: 100%; border-collapse: collapse; color: white; }
+.table tr { border-bottom: 1px solid rgba(255,255,255,0.1); }
+.table td { padding: 12px 8px; vertical-align: middle; }
+
+.pill {
+  display: inline-block;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.15);
+  color: white;
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+/* Pagination */
+.pager { display: flex; gap: 8px; align-items: center; justify-content: flex-end; margin-top: 10px; }
+.pagebtn {
+  background: rgba(255,255,255,0.12);
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  color: white;
+}
+
+/* Forms */
+.input, textarea, select {
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.95rem;
+  background: rgba(255,255,255,0.12);
+  color: white;
+}
+textarea { min-height: 180px; resize: vertical; }
+
+/* Responsive */
+@media (max-width: 900px) {
+  .app { grid-template-columns: 1fr; }
+  .sidebar { position: relative; height: auto; }
+  .form-grid { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="logo">SE</div>
+      <div>
+        <div class="username">Kristina</div>
+        <div class="small">kristina@example.com</div>
+      </div>
+    </div>
+
+    <nav class="nav" id="nav">
+      <button class="active" data-view="inbox">Inbox <span class="small" id="badge-inbox" style="float:right"></span></button>
+      <button data-view="processed">Processed</button>
+      <button data-view="events">Events</button>
+      <button data-view="failed">Failed</button>
+      <button data-view="search">Search</button>
+    </nav>
+
+    <div style="margin-top:18px">
+      <button id="composeOpen" class="btn" style="width:100%">Compose</button>
+    </div>
+  </aside>
+
+  <div style="flex:1">
+    <header class="header">
+      <h1>Smart Email Assistant</h1>
+      <div class="top-actions">
+        <div id="status" class="small">Connected</div>
+        <button id="refreshBtn" class="btn ghost">Refresh</button>
+      </div>
+    </header>
+
+    <main class="main" id="main">
+      <!-- Views will be injected here -->
+    </main>
+  </div>
+</div>
+
+<!-- Compose Modal -->
+<div id="composeModal" style="display:none">
+  <div class="modal-overlay" id="composeBackdrop">
+    <div class="modal-content" role="dialog" aria-modal="true" style="max-width:600px;width:90%">
+      <div class="header">
+        <h1 style="margin:0; font-size:1.2rem; display:flex; align-items:center; gap:10px">
+          <i class="fas fa-envelope"></i> Compose Email
+        </h1>
+        <button id="closeCompose" class="close-btn">
+          <i class="fas fa-times"></i>
+        </button>
+      </div>
+      
+      <div class="content">
+        <div class="form-group" style="margin-bottom:15px">
+          <label for="composeTo" style="display:block; margin-bottom:5px; font-weight:500">To</label>
+          <input id="composeTo" class="input" placeholder="recipient@example.com">
+        </div>
+        
+        <div class="form-group" style="margin-bottom:15px">
+          <label for="composeSubject" style="display:block; margin-bottom:5px; font-weight:500">Subject</label>
+          <input id="composeSubject" class="input">
+        </div>
+        
+        <div class="form-group" style="margin-bottom:15px">
+          <label for="composeBody" style="display:block; margin-bottom:5px; font-weight:500">Message</label>
+          <textarea id="composeBody" style="min-height:200px"></textarea>
+        </div>
+        
+        <div class="original-message">
+          <h4 style="margin:0 0 10px 0; display:flex; align-items:center; gap:8px">
+            <i class="fas fa-quote-left"></i> Original Message
+          </h4>
+          <div class="original-message-content" style="max-height:200px; overflow-y:auto; line-height:1.6; padding:10px; background:rgba(0,0,0,0.1); border-radius:5px;"></div>
+        </div>
+        
+        <div class="action-buttons" style="display:flex; gap:10px; margin-top:20px">
+          <button id="sendEmailBtn" class="btn" style="background:#4a69bd; color:white">
+            <i class="fas fa-paper-plane"></i> Send
+          </button>
+          <button id="saveDraftBtn" class="btn" style="background:rgba(255,255,255,0.1); color:white; border:1px solid rgba(255,255,255,0.2)">
+            <i class="fas fa-save"></i> Save Draft
+          </button>
+        </div>
+        
+        <div class="ai-tools" style="margin-top:25px; padding-top:20px; border-top:1px solid rgba(255,255,255,0.1)">
+          <h3 style="margin:0 0 15px 0; display:flex; align-items:center; gap:8px">
+            <i class="fas fa-robot"></i> AI Tools
+          </h3>
+          <p style="margin-bottom:15px">Use AI to generate drafts, summarize, or propose times for meetings.</p>
+          
+          <div class="ai-buttons" style="display:flex; gap:10px">
+            <button id="genDraftBtn" class="btn" style="background:rgba(0,0,0,0.3); padding:10px 15px; border-radius:8px; cursor:pointer; display:flex; align-items:center; gap:8px">
+              <i class="fas fa-magic"></i> Generate Draft
+            </button>
+            <button id="summarizeBtn" class="btn" style="background:rgba(0,0,0,0.3); padding:10px 15px; border-radius:8px; cursor:pointer; display:flex; align-items:center; gap:8px">
+              <i class="fas fa-file-alt"></i> Summarize Email
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<style>
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(5px);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+}
+
+/* Updated Compose Modal Styles */
+#composeModal .modal-content {
+  background: linear-gradient(145deg, #332e5c, #1d193c);
+  color: white;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+#composeModal .header {
+  background: linear-gradient(to right, #332e5c, #1d193c) !important;
+  padding: 15px 20px !important;
+  border-radius: 10px 10px 0 0 !important;
+}
+
+#composeModal .content {
+  padding: 20px !important;
+  background: rgba(0, 0, 0, 0.2) !important;
+  border-radius: 0 0 10px 10px !important;
+  color: white !important;
+}
+
+#composeModal .input,
+#composeModal textarea {
+  background: rgba(0, 0, 0, 0.3) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  color: white !important;
+}
+
+#composeModal .original-message {
+  background: rgba(0, 0, 0, 0.3) !important;
+  border-left: 3px solid #a991f7 !important;
+}
+
+#composeModal .ai-tools {
+  border-top: 1px solid rgba(255, 255, 255, 0.1) !important;
+}
+
+#composeModal .ai-tools h3 {
+  color: white !important;
+}
+
+#composeModal .btn {
+  background: rgba(255, 255, 255, 0.15) !important;
+  color: white !important;
+  border: none !important;
+}
+
+#composeModal #saveDraftBtn {
+  background: transparent !important;
+  border: 1px solid rgba(255, 255, 255, 0.2) !important;
+}
+
+#composeModal .ai-buttons .btn {
+  background: rgba(0, 0, 0, 0.3) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+}
+
+/* Updated Schedule Modal Styles */
+#scheduleModal .modal {
+  background: linear-gradient(145deg, #332e5c, #1d193c) !important;
+  padding: 15px !important;
+  border-radius: 10px !important;
+  color: white !important;
+}
+
+#scheduleModal .input {
+  background: rgba(0, 0, 0, 0.3) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  color: white !important;
+}
+#composeModal .form-group label {
+  color: rgba(255,255,255,0.8);
+}
+
+#composeModal .input, 
+#composeModal textarea {
+  width: 100%;
+  padding: 10px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: white;
+}
+
+#composeModal textarea {
+  min-height: 200px;
+}
+
+#composeModal .action-buttons {
+  display: flex;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+#composeModal .btn {
+  padding: 10px 20px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 500;
+}
+
+#composeModal .ai-buttons .btn {
+  padding: 10px 15px;
+}
+@keyframes modalOpen {
+  from {
+    opacity: 0;
+    transform: translateY(-30px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+</style>
+
+<!-- Schedule Modal -->
+<div id="scheduleModal" style="display:none">
+  <div class="modal-backdrop" id="scheduleBackdrop">
+    <div class="modal">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <strong>Schedule Meeting</strong>
+        <button id="closeSchedule" class="pagebtn">Close</button>
+      </div>
+      <div class="form-row">
+        <label>Title</label>
+        <input id="schedTitle" class="input"/>
+      </div>
+      <div class="form-row">
+        <label>Attendees (comma separated)</label>
+        <input id="schedAttendees" class="input" placeholder="alex@example.com, bob@example.com"/>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <div style="flex:1">
+          <label>Start (YYYY-MM-DD HH:MM)</label>
+          <input id="schedStart" class="input" placeholder="2025-08-13 16:00"/>
+        </div>
+        <div style="width:160px">
+          <label>Duration (minutes)</label>
+          <input id="schedDur" class="input" value="60"/>
+        </div>
+      </div>
+      <div style="margin-top:12px;display:flex;gap:8px">
+        <button id="schedCreate" class="btn">Create</button>
+        <button id="schedSuggest" class="btn ghost">Suggest Alternatives</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+/*
+  Frontend SPA:
+  - Loads /api/emails?page=.. for inbox
+  - /api/processed, /api/events, /api/failed, /api/search?q=...
+  - Compose and Schedule call /api/send and /api/schedule
+*/
+
+const views = {
+  inbox: renderInbox,
+  processed: renderProcessed,
+  events: renderEvents,
+  failed: renderFailed,
+  search: renderSearch
+};
+
+const state = {
+  inboxPage:1, inboxTotal:1,
+  processedPage:1, eventsPage:1, failedPage:1
+};
+
+document.addEventListener('DOMContentLoaded', init);
+
+function init(){
+  // nav
+  document.querySelectorAll('.nav button').forEach(btn=>{
+    btn.addEventListener('click', ()=> {
+      document.querySelectorAll('.nav button').forEach(b=>b.classList.remove('active'));
+      btn.classList.add('active');
+      const view = btn.dataset.view;
+      loadView(view);
+    });
+  });
+
+  // Compose modal buttons
+  document.getElementById('composeOpen').addEventListener('click', ()=> showCompose(true));
+  document.getElementById('closeCompose').addEventListener('click', ()=> showCompose(false));
+  document.getElementById('sendEmailBtn').addEventListener('click', sendEmail);
+  document.getElementById('saveDraftBtn').addEventListener('click', saveDraft);
+  document.getElementById('genDraftBtn').addEventListener('click', generateDraft);
+
+  // schedule modal
+  document.getElementById('schedCreate').addEventListener('click', createSchedule);
+  document.getElementById('closeSchedule').addEventListener('click', ()=> showSchedule(false));
+  document.getElementById('refreshBtn').addEventListener('click', ()=> {
+    const active = document.querySelector('.nav button.active').dataset.view;
+    loadView(active, true);
+  });
+
+  // initial
+  loadView('inbox');
+  fetchCounts();
+}
+
+/* ---------- Helpers ---------- */
+function api(url, opts){
+  return fetch(url, Object.assign({headers:{'Content-Type':'application/json'}} , opts))
+    .then(r=>r.ok? r.json(): r.text().then(t=> { throw new Error(t || r.statusText) }))
+}
+
+/* ---------- Views ---------- */
+
+function loadView(name, force=false){
+  const main = document.getElementById('main');
+  main.innerHTML = '<div class="card"><div class="small">Loading...</div></div>';
+  views[name]().catch(err=>{
+    main.innerHTML = `<div class="card"><strong>Error</strong><pre style="white-space:pre-wrap">${err.message}</pre></div>`;
+    console.error(err);
+  });
+}
+
+async function fetchCounts(){
+  try{
+    const data = await api('/api/counts');
+    document.getElementById('badge-inbox').innerText = data.unread || '';
+  }catch(e){ console.warn(e) }
+}
+
+async function renderInbox() {
+  const page = state.inboxPage || 1;
+  const res = await api(`/api/emails?page=${page}`);
+  const main = document.getElementById('main');
+  state.inboxTotal = res.total_pages || 1;
+
+  let html = `<div class="card">
+    <div class="toolbar">
+      <div>
+        <strong>Inbox</strong>
+        <div class="small">Showing page ${page} of ${state.inboxTotal}</div>
+      </div>
+      <div>
+        <button class="btn" onclick="showCompose(true)">Compose</button>
+        <button class="btn ghost" onclick="loadView('inbox')">Refresh</button>
+      </div>
+    </div>`;
+
+  if(!res.items || res.items.length===0) {
+    html += `<div class="small">No messages found.</div></div>`;
+    main.innerHTML = html;
+    return;
+  }
+
+  html += `<div class="cards-grid-container">`;
+  res.items.forEach(e => {
+    html += `
+      <div class="dashboard-card">
+        <div class="card-header">
+          <div class="card-avatar">${e.from_name ? e.from_name.charAt(0).toUpperCase() : '?'}</div>
+          <div>
+            <h3 class="card-title">${escapeHtml(e.subject || 'No subject')}</h3>
+            <div class="card-subtitle">${escapeHtml(e.from_display || e.from || '')}</div>
+          </div>
+        </div>
+        
+        <div class="card-content">
+          <div class="small">${escapeHtml(e.body ? e.body.substring(0, 120) + '...' : 'No content')}</div>
+        </div>
+        
+        <div class="card-meta">
+          ${escapeHtml(e.received_at || '')}
+        </div>
+        
+        <div class="card-footer">
+          <button class="pagebtn" onclick="openEmail('${e.id}')">Open</button>
+          <button class="pagebtn" onclick="processEmail('${e.id}')">Process</button>
+        </div>
+      </div>`;
+  });
+  html += `</div>`;
+
+  // pager
+  html += `<div class="pager" style="padding-top:18px">
+      <button class="pagebtn" ${page<=1?'disabled':''} onclick="changeInbox(${page-1})">Prev</button>
+      <div class="small">Page ${page} / ${state.inboxTotal}</div>
+      <button class="pagebtn" ${page>=state.inboxTotal?'disabled':''} onclick="changeInbox(${page+1})">Next</button>
+    </div>`;
+
+  html += `</div>`;
+  main.innerHTML = html;
+}
+
+async function renderProcessed() {
+  const page = state.processedPage || 1;
+  const res = await api(`/api/processed?page=${page}`);
+  const main = document.getElementById('main');
+
+  let html = `<div class="card">
+    <div class="toolbar"><strong>Processed Emails</strong></div>`;
+
+  if(!res.items || res.items.length===0) {
+    html += `<div class="small">No processed items yet.</div></div>`;
+    main.innerHTML = html; 
+    return;
+  }
+
+  html += `<div class="cards-grid-container">`;
+  res.items.forEach(it => {
+    html += `
+      <div class="dashboard-card">
+        <div class="card-header">
+          <div class="card-avatar">${(it.from || '?').charAt(0).toUpperCase()}</div>
+          <div>
+            <h3 class="card-title">${escapeHtml(it.subject || '')}</h3>
+            <div class="card-subtitle">${escapeHtml(it.category || '')}</div>
+          </div>
+        </div>
+        
+        <div class="card-content">
+          <div class="small">${escapeHtml(it.snippet || '')}</div>
+        </div>
+        
+        <div class="card-meta">
+          Processed: ${escapeHtml(it.processed_at || '')}
+        </div>
+        
+        <div class="card-footer">
+          <button class="pagebtn" onclick="openProcessed('${it.id}')">View</button>
+        </div>
+      </div>`;
+  });
+  html += `</div>`;
+  
+  html += `<div class="pager"><button class="pagebtn" onclick="changeProcessed(${page-1})">Prev</button><div class="small">Page ${page}</div><button class="pagebtn" onclick="changeProcessed(${page+1})">Next</button></div>`;
+  html += `</div>`;
+  main.innerHTML = html;
+}
+
+async function renderEvents() {
+  const page = state.eventsPage || 1;
+  const res = await api(`/api/events?page=${page}`);
+  const main = document.getElementById('main');
+
+  let html = `<div class="card"><div class="toolbar"><strong>Calendar Events</strong></div>`;
+
+  if(!res.items || !res.items.length) {
+    html += `<div class="small">No calendar events found.</div></div>`;
+    main.innerHTML = html; 
+    return;
+  }
+
+  html += `<div class="cards-grid-container">`;
+  res.items.forEach(ev => {
+    html += `
+      <div class="dashboard-card">
+        <div class="card-header">
+          <div class="card-avatar" style="background:#3a86ff;">E</div>
+          <div>
+            <h3 class="card-title">${escapeHtml(ev.title || '')}</h3>
+            <div class="card-subtitle">${escapeHtml(ev.attendees?.join(', ') || '')}</div>
+          </div>
+        </div>
+        
+        <div class="card-content">
+          <div class="small">${escapeHtml(ev.description || '')}</div>
+        </div>
+        
+        <div class="card-meta">
+          ${escapeHtml(ev.start_time || '')} (${escapeHtml(ev.duration || 0)} mins)
+        </div>
+        
+        <div class="card-footer">
+          <button class="pagebtn" onclick="openEvent('${ev.id}')">Open</button>
+        </div>
+      </div>`;
+  });
+  html += `</div>`;
+  
+  html += `<div class="pager"><button class="pagebtn" onclick="changeEvents(${page-1})">Prev</button><div class="small">Page ${page}</div><button class="pagebtn" onclick="changeEvents(${page+1})">Next</button></div>`;
+  html += `</div>`;
+  main.innerHTML = html;
+}
+
+async function renderFailed(){
+  const res = await api(`/api/failed`);
+  const main = document.getElementById('main');
+  let html = `<div class="card"><div class="toolbar"><strong>Failed Items / Logs</strong></div>`;
+  if(!res.items || res.items.length===0){ html += `<div class="small">No failures logged.</div></div>`; main.innerHTML = html; return; }
+  res.items.forEach(it=> {
+    html += `<div class="card" style="margin-bottom:8px"><div style="font-weight:700">${escapeHtml(it.title||'')}</div><pre style="white-space:pre-wrap">${escapeHtml(it.error||'')}</pre></div>`;
+  });
+  html += `</div>`;
+  main.innerHTML = html;
+}
+
+async function renderSearch(){
+  const main = document.getElementById('main');
+  main.innerHTML = `<div class="card">
+    <div class="toolbar">
+      <div><strong>Search Emails & Events</strong></div>
+      <div>
+        <input id="searchQ" class="input" placeholder="Sender, subject, date..." style="width:260px"/>
+        <button class="btn ghost" onclick="doSearch()">Search</button>
+      </div>
+    </div>
+    <div id="searchResults"></div>
+  </div>`;
+}
+
+async function doSearch(){
+  const q = document.getElementById('searchQ').value;
+  const res = await api(`/api/search?q=${encodeURIComponent(q)}`);
+  const wrap = document.getElementById('searchResults');
+  if(!res.items || !res.items.length){ wrap.innerHTML = `<div class="small">No results</div>`; return; }
+  let html = `<table class="table"><tbody>`;
+  res.items.forEach(it=>{
+    html += `<tr>
+      <td style="width:48px"><div class="pill">S</div></td>
+      <td><div style="font-weight:700">${escapeHtml(it.title||it.subject||'')}</div><div class="small">${escapeHtml(it.preview||'')}</div></td>
+      <td style="text-align:right">${escapeHtml(it.date||'')}</td>
+    </tr>`;
+  });
+  html += `</tbody></table>`;
+  wrap.innerHTML = html;
+}
+
+/* ---------- actions ---------- */
+
+function changeInbox(p){ if(p<1) return; state.inboxPage=p; loadView('inbox'); }
+function changeProcessed(p){ if(p<1) return; state.processedPage=p; loadView('processed'); }
+function changeEvents(p){ if(p<1) return; state.eventsPage=p; loadView('events'); }
+
+function openEmail(id) {
+  api(`/api/emails/${id}`).then(data => {
+    showCompose(true);
+    document.getElementById('composeTo').value = data.from || '';
+    document.getElementById('composeSubject').value = 'Re: ' + (data.subject || '');
+    
+    // Store original message in dataset
+    document.getElementById('composeModal').dataset.originalMessage = data.body || '';
+    
+    // Display original message in the new section
+    const originalMsgEl = document.querySelector('.original-message-content');
+    if (data.body) {
+      // Preserve line breaks and basic formatting
+      originalMsgEl.innerHTML = data.body.replace(/\n/g, '<br>');
+    } else {
+      originalMsgEl.innerHTML = 'No original message';
+    }
+  }).catch(err => alert('Failed to open email: ' + err.message));
+}
+
+function openProcessed(id){
+  api(`/api/processed/${id}`).then(d=>{
+    alert('Processed item:\n\n' + JSON.stringify(d, null, 2));
+  }).catch(e=>alert('Error: ' + e.message));
+}
+
+function openEvent(id){
+  api(`/api/events/${id}`).then(d=>{
+    alert('Event:\n\n' + JSON.stringify(d, null, 2));
+  }).catch(e=>alert('Error: ' + e.message));
+}
+
+async function processEmail(id){
+  const ok = confirm('Run processing for this email now?');
+  if(!ok) return;
+  try{
+    const res = await api(`/api/process/${id}`, {method:'POST'});
+    alert('Processed: ' + JSON.stringify(res));
+    loadView('processed');
+  }catch(e){ alert('Error: ' + e.message) }
+}
+
+/* ---------- Compose actions ---------- */
+
+function showCompose(show){
+  document.getElementById('composeModal').style.display = show ? 'block' : 'none';
+}
+
+function sendEmail() {
+  const to = document.getElementById('composeTo').value;
+  const subj = document.getElementById('composeSubject').value;
+  let body = document.getElementById('composeBody').value;
+  
+  // Append original message if available
+  const originalMsg = document.getElementById('composeModal').dataset.originalMessage || '';
+  if (originalMsg) {
+    body += '\n\n--- Original message ---\n' + originalMsg;
+  }
+  
+  // Rest of your sendEmail logic remains the same
+  try {
+    api('/api/send', {
+      method: 'POST',
+      body: JSON.stringify({ to, subject: subj, body })
+    }).then(res => {
+      alert('Sent: ' + JSON.stringify(res));
+      showCompose(false);
+      loadView('inbox');
+    }).catch(e => { 
+      alert('Send failed: ' + e.message);
+    });
+  } catch(e) { 
+    alert('Send failed: ' + e.message);
+  }
+}
+
+// Add modal close functionality
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') {
+    showCompose(false);
+  }
+});
+
+async function saveDraft(){
+  const to = document.getElementById('composeTo').value;
+  const subj = document.getElementById('composeSubject').value;
+  const body = document.getElementById('composeBody').value;
+  try{
+    await api('/api/drafts', {method:'POST', body: JSON.stringify({to, subject:subj, body})});
+    alert('Draft saved');
+    showCompose(false);
+  }catch(e){ alert('Save draft failed: ' + e.message) }
+}
+
+async function generateDraft(){
+  const subject = document.getElementById('composeSubject').value || 'Short subject';
+  const prompt = `Write a concise professional email about: ${subject}`;
+  try{
+    const res = await api('/api/generate', {method:'POST', body: JSON.stringify({prompt})});
+    document.getElementById('composeBody').value = res.text || '';
+  }catch(e){ alert('AI generation failed: ' + e.message) }
+}
+
+/* ---------- Scheduling ---------- */
+
+function showSchedule(show){ document.getElementById('scheduleModal').style.display = show ? 'block' : 'none'; }
+
+async function createSchedule(){
+  const title = document.getElementById('schedTitle').value;
+  const attendees = document.getElementById('schedAttendees').value.split(',').map(s=>s.trim()).filter(Boolean);
+  const start = document.getElementById('schedStart').value;
+  const duration = parseInt(document.getElementById('schedDur').value||60,10);
+  try{
+    const res = await api('/api/schedule', {method:'POST', body: JSON.stringify({title, attendees, start, duration})});
+    alert('Scheduled: ' + JSON.stringify(res));
+    showSchedule(false);
+    loadView('events');
+  }catch(e){ alert('Schedule failed: ' + e.message) }
+}
+
+/* ---------- util ---------- */
+function escapeHtml(s){ if(!s) return ''; return s.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;'); }
+
+</script>
+</body>
+</html>
